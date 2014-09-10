@@ -13,9 +13,10 @@
 
 
 module Yesod.PureScript (
-    PureScriptSite(PureScriptSite),
+    PureScriptSite,
     YesodPureScript,
     YesodPureScriptOptions(YesodPureScriptOptions),
+    createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
     getPureScriptRoute
  )
@@ -24,10 +25,13 @@ where
 -- PureScript Yesod Subsite
 -- goal is to serve eg ./purs/foo.purs file at /purs/foo.js url.
 
-import Control.Monad (forM)
+import Control.Applicative ((<$>))
+import Control.Exception (catch, SomeException)
+import Control.Monad (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either (lefts, rights)
 import Data.List (isSuffixOf)
+import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Prelude
 import System.FilePath ((</>))
@@ -37,57 +41,88 @@ import Yesod.Core ( HandlerT
                   , TypedContent (TypedContent)
                   , Yesod
                   , YesodSubDispatch
+                  , getYesod
                   , mkYesodSubDispatch
                   , toContent
                   , yesodSubDispatch )
+import qualified Control.Concurrent as C
+import qualified Control.Concurrent.MVar as CM
 import qualified Data.Default as DD
+import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import qualified Data.Text.IO as TIO
 import qualified Debug.Trace as DT
+import qualified Filesystem as FS
+import qualified Filesystem.Path as FSP
+import qualified Filesystem.Path.CurrentOS as FSPC
 import qualified Language.PureScript as P
 import qualified System.Directory as D
+import qualified System.FSNotify as SFN
 import qualified System.IO.UTF8 as U
+import qualified Text.Parsec as TP
 
 import Yesod.PureScript.Data
 
 
-data YesodPureScriptOptions = YesodPureScriptOptions { ypsSourceDirectories :: [Text]
-                                                     , ypsErrorDivId :: Maybe Text }
+-- | Things that are Yesod master can also be YesodPureScript master.
+class Yesod master => YesodPureScript master
 
 
-class Yesod master => YesodPureScript master where
-    name :: HandlerT master IO Text
-    name = return "purescript"
-
-
+-- | All things that are "YesodPureScript master", are also this other thing,
+-- because they /nobody knows, because TH/.
 instance YesodPureScript master => YesodSubDispatch PureScriptSite (HandlerT master IO) where
     yesodSubDispatch = $(mkYesodSubDispatch resourcesPureScriptSite)
 
 
+-- | YesodPureScriptOptions thing is also Data.Default.Default, because it has "def",
+-- which is defaultYesodPureScriptOptions.
 instance DD.Default YesodPureScriptOptions where
     def = defaultYesodPureScriptOptions
 
 
+-- | Shortcut type for handlers of this subsite.
 type PureScriptHandler a = (YesodPureScript master) => HandlerT PureScriptSite (HandlerT master IO) a
 
 
+-- | Default options for YesodPureScript.
+-- Needed when creating PureScriptSite.
+-- Please don't create YesodPureScriptOptions by calling constructor directly,
+-- so I can add more options without breaking your code.
 defaultYesodPureScriptOptions :: YesodPureScriptOptions
 defaultYesodPureScriptOptions = YesodPureScriptOptions { ypsSourceDirectories = ["purs", "bower_components"]
                                                        , ypsErrorDivId = Nothing }
 
 
+-- | Create pure script site.
+-- Initialises MVar of compiled modules to empty map.
+createYesodPureScriptSite :: YesodPureScriptOptions -> IO PureScriptSite
+createYesodPureScriptSite opts = do
+    let state = PureScriptSiteState { psStateWatchStarted = False
+                                    , psStateModules = M.empty }
+    mv <- CM.newMVar state
+    return $ PureScriptSite { pssState = mv
+                            , pssOptions = opts }
+
+
+-- | For convenience: turns a path as list into a route.
 getPureScriptRoute :: [Text] -> Route PureScriptSite
 getPureScriptRoute p = PureScriptCompiledR p
 
 
+-- | This is the main handler, "entry point" for YesodPureScript.
+-- It takes a path to module as a list of Text, then it parses and
+-- compiles stuff and returns results to client.
 getPureScriptCompiledR :: [Text] -> PureScriptHandler TypedContent
 getPureScriptCompiledR p = do
+    me <- getYesod
+    liftIO $ ensureWatchStarted me
     let jsModulePath = T.intercalate "." p  -- foo.bar.baz[.js]
     let jsModuleName0 = if T.isSuffixOf ".js" jsModulePath
             then T.dropEnd 3 jsModulePath
             else jsModulePath
     let jsModuleName = DT.trace ("js module name: " ++ show jsModuleName0) jsModuleName0
-    compileResult <- liftIO $ compilePureScriptFile ["purs", "bower_components"] jsModuleName
+    compileResult <- liftIO $ compilePureScriptFile me jsModuleName
     case compileResult of
         Left err -> do
             let errbs = T.encodeUtf8 err
@@ -97,7 +132,90 @@ getPureScriptCompiledR p = do
             return (TypedContent "application/javascript" (toContent jsbs))
 
 
--- Take dir, find '*.purs' files recursively.
+-- | Called by file-watching thread after loading module from purs file.
+-- Updates in-memory cache of modules.
+-- Result of compilation is either textual representation of reading errors or module.
+-- Cache of loaded modules is key-ed by purs filename - this way we can efficiently handle
+-- file deletions or renames.
+addModule :: PureScriptSite -> Text -> Either Text [P.Module] -> IO ()
+addModule pureScriptSite fileName eitherErrOrModules = do
+    CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
+        let curmap = psStateModules state
+        let newmap = M.insert fileName eitherErrOrModules curmap
+        TIO.putStrLn $ T.concat ["modules: ", T.pack $ show $ M.keys newmap]
+        let newstate = state { psStateModules = newmap }
+        return newstate
+
+
+-- | Executed when file disappears from watched dirs,
+-- removes module from PureScriptSite's state.
+removeModule :: PureScriptSite -> Text -> IO ()
+removeModule pureScriptSite fileName = do
+    CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
+        let curmap = psStateModules state
+        let newmap = M.delete fileName curmap
+        TIO.putStrLn $ T.concat ["modules: ", T.pack $ show $ M.keys newmap]
+        let newstate = state { psStateModules = newmap }
+        return newstate
+
+
+
+-- | Executed on file change. Updates loaded modules MVar-ed in PureScriptSite.
+handleFileEvent :: PureScriptSite -> SFN.Event -> IO ()
+handleFileEvent pureScriptSite event = do
+        case event of
+            SFN.Added fp _ -> do
+                TIO.putStrLn "file added"
+                parsed <- parseFile (fp2t fp)
+                addModule pureScriptSite (fp2t fp) parsed
+            SFN.Modified fp _ -> do
+                TIO.putStrLn "file modified"
+                parsed <- parseFile (fp2t fp)
+                addModule pureScriptSite (fp2t fp) parsed
+            SFN.Removed fp _ -> do
+                TIO.putStrLn "file removed"
+                removeModule pureScriptSite (fp2t fp)
+    where
+        fp2t fp = case FSPC.toText fp of
+            Left _ -> error "invalid path"
+            Right _t -> _t
+
+
+-- | Start file-watching stuff if not already started.
+ensureWatchStarted :: PureScriptSite -> IO ()
+ensureWatchStarted pureScriptSite = do
+    CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
+        case psStateWatchStarted state of
+            False -> do
+                _m <- parseAllFiles pureScriptSite
+                startWatchThread pureScriptSite
+                return (state { psStateWatchStarted = True
+                              , psStateModules = _m })
+            _ -> return state
+
+
+-- | Creates thread that watches input dirs and fires events on files.
+-- This way modified files are instantly loaded, making dev setup more responsive.
+startWatchThread :: PureScriptSite -> IO ()
+startWatchThread pureScriptSite = do
+        C.forkIO $ do
+            let opts = pssOptions pureScriptSite
+            let dirs = ypsSourceDirectories opts
+            SFN.withManager $ \mgr -> do
+                forM_ dirs $ \dir -> do
+                    SFN.watchTree mgr (FSPC.fromText dir) (const True) $ \e -> do
+                        catch
+                            (handleFileEvent pureScriptSite e)
+                            (\e -> do
+                                -- XXX: catching all is bad
+                                let msg = show (e :: SomeException)
+                                TIO.putStrLn $ T.concat ["exception in handleFileEvent: ", T.pack msg])
+                forever $ do
+                    C.threadDelay (12 * 3600 * 1000 * 1000)
+        return ()
+
+
+-- | Take human-readable dir name, find '*.purs' files recursively.
 findFiles :: Text -> IO [Text]
 findFiles dir = do
     let dirp = T.unpack dir
@@ -113,41 +231,61 @@ findFiles dir = do
     return paths
 
 
-parseFile :: Text -> IO (Either ParseError [P.Module])
+-- | High level parse interface for PureScript.
+-- Takes file path as Text, returns either error as Text or parsed modules.
+-- Note: PureScript file can define more than one module.
+parseFile :: Text -> IO (Either Text [P.Module])
 parseFile fn = do
-    fileContents <- U.readFile (T.unpack (DT.trace ("parsing " ++ show fn) fn))
-    return $ P.runIndentParser (T.unpack fn) P.parseModules fileContents
+    TIO.putStrLn $ T.concat ["parsing \"", fn, "\""]
+    fileContents <- U.readFile (T.unpack fn)
+    let eem = P.runIndentParser (T.unpack fn) P.parseModules fileContents
+    let r = case eem of
+            Left _e -> Left . T.pack . show $ _e
+            Right m -> Right m
+    TIO.putStrLn $ T.concat ["parsed \"", fn, "\""]
+    return r
 
 
--- Compile modules, return either parse error or parsed modules.
-readInput :: [Text] -> IO (Either ParseError [P.Module])
-readInput sourceDirs = do
+-- | Parse modules, return map of path -> parse result: either parse error or parsed modules.
+-- This beautiful code tries to make sure that paths are absolute.
+-- Current impl uses Filesystem.FilePath in hopes that it's faster than String-based impl and
+-- that it handles edge cases better.
+parseAllFiles :: PureScriptSite -> IO (M.Map Text (Either Text [P.Module]))
+parseAllFiles pureScriptSite = do
+    let sourceDirs = ypsSourceDirectories $ pssOptions pureScriptSite
     let lsActions = map (\d -> findFiles d) sourceDirs
     dirsFiles <- sequence lsActions
-    let fileNames = concat dirsFiles :: [Text]
-    parseResults <- mapM parseFile fileNames
-    let parseErrors = lefts parseResults :: [ParseError]
-    let parsedModules = concat (rights parseResults) :: [P.Module]
-    case parseErrors of
-        [] -> return (Right parsedModules)
-        (x:_) -> return (Left x)
+    let relFileNames = map FSPC.fromText $ concat dirsFiles
+    cwd <- FS.getWorkingDirectory
+    let absFileNames = map (FSP.append cwd) relFileNames
+    mParseResults <- forM  absFileNames $ \afn -> do
+        case FSPC.toText afn of
+            Left _ -> return Nothing
+            Right _t -> do
+                _p <- parseFile _t
+                return $ Just (_t, _p)
+    let parseResults = catMaybes mParseResults
+    return $ M.fromList $ parseResults
 
 
-compilePureScriptFile :: [Text] -> Text -> IO (Either Text Text)
-compilePureScriptFile sourceDirs moduleName = do
+-- | Takes PureScriptSite and module name and tries to compile given module in "--main <module>" mode.
+-- PureScriptSite contains parsed modules.
+compilePureScriptFile :: PureScriptSite -> Text -> IO (Either Text Text)
+compilePureScriptFile pureScriptSite moduleName = do
     let psOptions = P.defaultOptions { P.optionsModules = [T.unpack moduleName]
                                      , P.optionsMain = Just (T.unpack moduleName)
                                      , P.optionsPerformRuntimeTypeChecks = False  -- XXX exception in generated code when enabled
                                      , P.optionsNoPrelude = False
                                      , P.optionsBrowserNamespace = Just "PS" }    -- XXX fromJust error when Nothing
-    parsed <- readInput sourceDirs
-    case parsed of
-        Left _ -> return $ Left "parse error" -- XXX
-        Right modules -> do
-            let compileResult = DT.trace "compiled modules" $ P.compile psOptions (DT.trace "about to compile modules" modules)
-            case compileResult of
-                Left err -> return $ Left (T.pack err)
-                Right (js, _, _) -> do
-                    return $ Right (T.pack js)
+    modules <- CM.withMVar (pssState pureScriptSite) $ \state -> do
+        let _m = (psStateModules state)
+        let _values = M.elems _m
+        let modules = concat (rights _values)
+        return modules
+    let compileResult = P.compile psOptions modules
+    case compileResult of
+        Left err -> return $ Left (T.pack err)
+        Right (js, _, _) -> do
+            return $ Right (T.pack js)
 
 

@@ -16,13 +16,19 @@ library
     other-modules: Yesod.PureScript.Data
     other-modules:
     build-depends: base >= 4 && < 5
+                 , containers
                  , data-default
                  , directory
                  , filepath
+                 , fsnotify
+                 , network < 2.6
                  , parsec
                  , purescript < 0.5.5
                  , text
+                 , system-filepath
+                 , system-fileio
                  , transformers
                  , utf8-string
                  , yesod-core
+    ghc-options: -Wall
 
