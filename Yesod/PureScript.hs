@@ -141,7 +141,10 @@ addModule pureScriptSite fileName eitherErrOrModules = do
         let curmap = psStateModules state
         let newmap = M.insert fileName eitherErrOrModules curmap
         TIO.putStrLn $ T.concat ["modules: ", T.pack $ show $ M.keys newmap]
-        let newstate = state { psStateModules = newmap }
+        -- For now re-loading of module causes cache all compiled modules to be
+        -- dropped.
+        let newstate = state { psStateModules = newmap
+                             , psStateCompiledModules = M.empty }
         return newstate
 
 
@@ -189,7 +192,8 @@ ensureWatchStarted pureScriptSite = do
                 _m <- parseAllFiles pureScriptSite
                 startWatchThread pureScriptSite
                 return (state { psStateWatchStarted = True
-                              , psStateModules = _m })
+                              , psStateModules = _m
+                              , psStateCompiledModules = M.empty })
             _ -> return state
 
 
