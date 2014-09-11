@@ -8,7 +8,6 @@ import Control.Concurrent (MVar)
 import Data.Text (Text)
 import Yesod.Core
 
-import qualified Control.Concurrent as C
 import qualified Data.Map.Strict as M
 import qualified Language.PureScript as P
 
@@ -19,8 +18,17 @@ data YesodPureScriptOptions = YesodPureScriptOptions { ypsSourceDirectories :: [
 
 
 -- | This is meant to be stored in synchronized variable.
-data PureScriptSiteState = PureScriptSiteState { psStateWatchStarted :: Bool
-                                               , psStateModules :: M.Map Text (Either Text [P.Module]) }
+data PureScriptSiteState = PureScriptSiteState {
+        -- | A flag telling us if compiler subthread is running.
+        psStateWatchStarted :: Bool,
+        -- | Results of file parsing, either errors as text or list of modules,
+        -- keyed by file path.
+        psStateModules :: M.Map Text (Either Text [P.Module]),
+        -- | Cached modules compiled with "module" and "main" options to Text.
+        -- Result of compilation is either compile error(s) as Text or
+        -- the Text of compiled module.
+        psStateCompiledModules :: M.Map Text (Either Text Text)
+    }
 
 
 -- | Yesod sub site for pure script.

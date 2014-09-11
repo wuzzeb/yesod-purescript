@@ -25,17 +25,15 @@ where
 -- PureScript Yesod Subsite
 -- goal is to serve eg ./purs/foo.purs file at /purs/foo.js url.
 
-import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException)
 import Control.Monad (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
-import Data.Either (lefts, rights)
+import Data.Either (rights)
 import Data.List (isSuffixOf)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Prelude
 import System.FilePath ((</>))
-import Text.Parsec (ParseError)
 import Yesod.Core ( HandlerT
                   , Route
                   , TypedContent (TypedContent)
@@ -60,7 +58,6 @@ import qualified Language.PureScript as P
 import qualified System.Directory as D
 import qualified System.FSNotify as SFN
 import qualified System.IO.UTF8 as U
-import qualified Text.Parsec as TP
 
 import Yesod.PureScript.Data
 
@@ -99,7 +96,8 @@ defaultYesodPureScriptOptions = YesodPureScriptOptions { ypsSourceDirectories = 
 createYesodPureScriptSite :: YesodPureScriptOptions -> IO PureScriptSite
 createYesodPureScriptSite opts = do
     let state = PureScriptSiteState { psStateWatchStarted = False
-                                    , psStateModules = M.empty }
+                                    , psStateModules = M.empty
+                                    , psStateCompiledModules = M.empty }
     mv <- CM.newMVar state
     return $ PureScriptSite { pssState = mv
                             , pssOptions = opts }
@@ -155,7 +153,8 @@ removeModule pureScriptSite fileName = do
         let curmap = psStateModules state
         let newmap = M.delete fileName curmap
         TIO.putStrLn $ T.concat ["modules: ", T.pack $ show $ M.keys newmap]
-        let newstate = state { psStateModules = newmap }
+        let newstate = state { psStateModules = newmap
+                             , psStateCompiledModules = M.empty }
         return newstate
 
 
@@ -198,7 +197,7 @@ ensureWatchStarted pureScriptSite = do
 -- This way modified files are instantly loaded, making dev setup more responsive.
 startWatchThread :: PureScriptSite -> IO ()
 startWatchThread pureScriptSite = do
-        C.forkIO $ do
+        _ <- C.forkIO $ do
             let opts = pssOptions pureScriptSite
             let dirs = ypsSourceDirectories opts
             SFN.withManager $ \mgr -> do
@@ -206,9 +205,9 @@ startWatchThread pureScriptSite = do
                     SFN.watchTree mgr (FSPC.fromText dir) (const True) $ \e -> do
                         catch
                             (handleFileEvent pureScriptSite e)
-                            (\e -> do
+                            (\_e -> do
                                 -- XXX: catching all is bad
-                                let msg = show (e :: SomeException)
+                                let msg = show (_e :: SomeException)
                                 TIO.putStrLn $ T.concat ["exception in handleFileEvent: ", T.pack msg])
                 forever $ do
                     C.threadDelay (12 * 3600 * 1000 * 1000)
@@ -282,10 +281,21 @@ compilePureScriptFile pureScriptSite moduleName = do
         let _values = M.elems _m
         let modules = concat (rights _values)
         return modules
-    let compileResult = P.compile psOptions modules
-    case compileResult of
-        Left err -> return $ Left (T.pack err)
-        Right (js, _, _) -> do
-            return $ Right (T.pack js)
-
+    compileResult <- CM.modifyMVar (pssState pureScriptSite) $ \state -> do
+        let _m = (psStateCompiledModules state)
+        case M.lookup moduleName _m of
+            Just r -> do
+                TIO.putStrLn $ T.concat ["compile result for js module \"", moduleName, "\" found in cache"]
+                return (state, r)
+            Nothing -> do
+                TIO.putStrLn $ T.concat ["compiling js module \"", moduleName, "\""]
+                -- No cached compile result in map, need to actually compile.
+                let compileResultRaw = P.compile psOptions modules
+                let compileResult = case compileResultRaw of
+                        Left errStr -> Left (T.pack errStr)
+                        Right (js, _, _) -> Right (T.pack js)
+                let newmap = M.insert moduleName compileResult _m
+                let newstate = state { psStateCompiledModules = newmap }
+                return (newstate, compileResult)
+    return compileResult
 
