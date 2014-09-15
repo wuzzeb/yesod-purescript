@@ -21,7 +21,6 @@ library
                  , directory
                  , filepath
                  , fsnotify
-                 , network < 2.6
                  , parsec
                  , purescript < 0.5.5
                  , text
