@@ -30,18 +30,24 @@ import Control.Monad (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either (rights)
 import Data.List (isSuffixOf)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
+import Language.PureScript (Module(Module))
 import Prelude
 import System.FilePath ((</>))
 import Yesod.Core ( HandlerT
+                  , Html
                   , Route
                   , TypedContent (TypedContent)
                   , Yesod
                   , YesodSubDispatch
                   , getYesod
+                  , hamlet
                   , mkYesodSubDispatch
+                  , shamlet
                   , toContent
+                  , toHtml
+                  , toTypedContent
                   , yesodSubDispatch )
 import qualified Control.Concurrent as C
 import qualified Control.Concurrent.MVar as CM
@@ -108,10 +114,88 @@ getPureScriptRoute :: [Text] -> Route PureScriptSite
 getPureScriptRoute p = PureScriptCompiledR p
 
 
+getPureScriptInfo :: PureScriptSite -> PureScriptHandler TypedContent
+getPureScriptInfo site = do
+    -- map of filename to either err module
+    moduleMap <- liftIO $ CM.withMVar (pssState site) $ \state -> return (psStateModules state)
+
+    -- (foo, Right bar) -> Just (foo, bar)
+    let _justRight (k, mv) = case mv of
+            Right v -> Just (k, v)
+            _ -> Nothing
+
+    -- (fn, [module])
+    let fnsmodules = mapMaybe _justRight (M.toAscList moduleMap)
+
+    let _justLeft (k, mv) = case mv of
+            Left v -> Just (k, v)
+            _ -> Nothing
+
+    -- (fileName, error)
+    let fnerrs = mapMaybe _justLeft (M.toAscList moduleMap)
+
+    return $ toTypedContent $ [shamlet|
+        $doctype 5
+        <html>
+            <style>
+                body {
+                    font-family: sans-serif;
+                    font-size: 10pt;
+                }
+            <body>
+                <h1>yesod-purescript Status
+
+                <h2>Loaded Modules
+
+                $case fnsmodules
+                    $of []
+                        <p>No modules loaded
+                    $of _
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Module
+                                    <th>File name
+                            <tbody>
+                                $forall fnmods <- fnsmodules
+                                    $with (fn, modules) <- fnmods
+                                        $forall (Module name _ _) <- modules
+                                            <tr>
+                                                <td>#{show name}
+                                                <td>#{fn}
+
+                <h2>Failed Modules
+
+                $case fnerrs
+                    $of []
+                        <p>All modules loaded without errors
+                    $of _
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>File name
+                                    <th>Error message
+                            <tbody>
+                                $forall (fn, err) <- fnerrs
+                                    <tr>
+                                        <td>#{fn}
+                                        <td>#{err}
+
+        |]
+    where
+
+
+
 -- | This is the main handler, "entry point" for YesodPureScript.
 -- It takes a path to module as a list of Text, then it parses and
 -- compiles stuff and returns results to client.
 getPureScriptCompiledR :: [Text] -> PureScriptHandler TypedContent
+
+getPureScriptCompiledR [] = do
+    me <- getYesod
+    liftIO $ ensureWatchStarted me
+    getPureScriptInfo me
+
 getPureScriptCompiledR p = do
     me <- getYesod
     liftIO $ ensureWatchStarted me
@@ -140,7 +224,6 @@ addModule pureScriptSite fileName eitherErrOrModules = do
     CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
         let curmap = psStateModules state
         let newmap = M.insert fileName eitherErrOrModules curmap
-        TIO.putStrLn $ T.concat ["modules: ", T.pack $ show $ M.keys newmap]
         -- For now re-loading of module causes cache all compiled modules to be
         -- dropped.
         let newstate = state { psStateModules = newmap
@@ -155,7 +238,6 @@ removeModule pureScriptSite fileName = do
     CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
         let curmap = psStateModules state
         let newmap = M.delete fileName curmap
-        TIO.putStrLn $ T.concat ["modules: ", T.pack $ show $ M.keys newmap]
         let newstate = state { psStateModules = newmap
                              , psStateCompiledModules = M.empty }
         return newstate
@@ -167,15 +249,15 @@ handleFileEvent :: PureScriptSite -> SFN.Event -> IO ()
 handleFileEvent pureScriptSite event = do
         case event of
             SFN.Added fp _ -> do
-                TIO.putStrLn "file added"
+                -- TIO.putStrLn "file added"
                 parsed <- parseFile (fp2t fp)
                 addModule pureScriptSite (fp2t fp) parsed
             SFN.Modified fp _ -> do
-                TIO.putStrLn "file modified"
+                -- TIO.putStrLn "file modified"
                 parsed <- parseFile (fp2t fp)
                 addModule pureScriptSite (fp2t fp) parsed
             SFN.Removed fp _ -> do
-                TIO.putStrLn "file removed"
+                -- TIO.putStrLn "file removed"
                 removeModule pureScriptSite (fp2t fp)
     where
         fp2t fp = case FSPC.toText fp of
@@ -239,13 +321,13 @@ findFiles dir = do
 -- Note: PureScript file can define more than one module.
 parseFile :: Text -> IO (Either Text [P.Module])
 parseFile fn = do
-    TIO.putStrLn $ T.concat ["parsing \"", fn, "\""]
+    -- TIO.putStrLn $ T.concat ["parsing \"", fn, "\""]
     fileContents <- U.readFile (T.unpack fn)
     let eem = P.runIndentParser (T.unpack fn) P.parseModules fileContents
     let r = case eem of
             Left _e -> Left . T.pack . show $ _e
             Right m -> Right m
-    TIO.putStrLn $ T.concat ["parsed \"", fn, "\""]
+    -- TIO.putStrLn $ T.concat ["parsed \"", fn, "\""]
     return r
 
 
