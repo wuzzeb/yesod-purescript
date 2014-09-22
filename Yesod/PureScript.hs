@@ -36,17 +36,14 @@ import Language.PureScript (Module(Module))
 import Prelude
 import System.FilePath ((</>))
 import Yesod.Core ( HandlerT
-                  , Html
                   , Route
                   , TypedContent (TypedContent)
                   , Yesod
                   , YesodSubDispatch
                   , getYesod
-                  , hamlet
                   , mkYesodSubDispatch
                   , shamlet
                   , toContent
-                  , toHtml
                   , toTypedContent
                   , yesodSubDispatch )
 import qualified Control.Concurrent as C
@@ -357,11 +354,11 @@ parseAllFiles pureScriptSite = do
 -- PureScriptSite contains parsed modules.
 compilePureScriptFile :: PureScriptSite -> Text -> IO (Either Text Text)
 compilePureScriptFile pureScriptSite moduleName = do
-    let psOptions = P.defaultOptions { P.optionsModules = [T.unpack moduleName]
-                                     , P.optionsMain = Just (T.unpack moduleName)
-                                     , P.optionsPerformRuntimeTypeChecks = False  -- XXX exception in generated code when enabled
-                                     , P.optionsNoPrelude = False
-                                     , P.optionsBrowserNamespace = Just "PS" }    -- XXX fromJust error when Nothing
+    let compileOptions = P.CompileOptions "PS" [T.unpack moduleName] []
+    let psOptions = P.defaultCompileOptions { P.optionsMain = Just (T.unpack moduleName)
+                                            , P.optionsPerformRuntimeTypeChecks = False  -- XXX exception in generated code when enabled
+                                            , P.optionsNoPrelude = False
+                                            , P.optionsAdditional = compileOptions}
     modules <- CM.withMVar (pssState pureScriptSite) $ \state -> do
         let _m = (psStateModules state)
         let _values = M.elems _m
@@ -376,7 +373,7 @@ compilePureScriptFile pureScriptSite moduleName = do
             Nothing -> do
                 TIO.putStrLn $ T.concat ["compiling js module \"", moduleName, "\""]
                 -- No cached compile result in map, need to actually compile.
-                let compileResultRaw = P.compile psOptions modules
+                let compileResultRaw = P.compile psOptions modules ["yesod-purescript"]
                 let compileResult = case compileResultRaw of
                         Left errStr -> Left (T.pack errStr)
                         Right (js, _, _) -> Right (T.pack js)
