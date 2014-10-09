@@ -358,7 +358,8 @@ compilePureScriptFile pureScriptSite moduleName = do
     let psOptions = P.defaultCompileOptions { P.optionsMain = Just (T.unpack moduleName)
                                             , P.optionsPerformRuntimeTypeChecks = False  -- XXX exception in generated code when enabled
                                             , P.optionsNoPrelude = False
-                                            , P.optionsAdditional = compileOptions}
+                                            , P.optionsAdditional = compileOptions
+                                            , P.optionsVerboseErrors = True }
     modules <- CM.withMVar (pssState pureScriptSite) $ \state -> do
         let _m = (psStateModules state)
         let _values = M.elems _m
