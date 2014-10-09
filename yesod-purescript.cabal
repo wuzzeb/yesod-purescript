@@ -15,7 +15,8 @@ library
     exposed-modules: Yesod.PureScript
     other-modules: Yesod.PureScript.Data
     other-modules:
-    build-depends: base >= 4 && < 5
+    build-depends: aeson >= 0.8
+                 , base >= 4 && < 5
                  , containers
                  , data-default
                  , directory
@@ -23,6 +24,7 @@ library
                  , fsnotify
                  , parsec
                  , purescript >= 0.5.6.2
+                 , shakespeare >= 2
                  , text
                  , system-filepath
                  , system-fileio

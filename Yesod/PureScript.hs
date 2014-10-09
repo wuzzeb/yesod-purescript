@@ -18,7 +18,9 @@ module Yesod.PureScript (
     YesodPureScriptOptions(YesodPureScriptOptions),
     createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
-    getPureScriptRoute
+    getPureScriptRoute,
+    ypsErrorDivId,
+    ypsSourceDirectories
  )
 where
 
@@ -35,6 +37,7 @@ import Data.Text (Text)
 import Language.PureScript (Module(Module))
 import Prelude
 import System.FilePath ((</>))
+import Text.Julius
 import Yesod.Core ( HandlerT
                   , Route
                   , TypedContent (TypedContent)
@@ -48,11 +51,13 @@ import Yesod.Core ( HandlerT
                   , yesodSubDispatch )
 import qualified Control.Concurrent as C
 import qualified Control.Concurrent.MVar as CM
+import qualified Data.Aeson.Types as AesonTypes
 import qualified Data.Default as DD
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as TIO
+import qualified Data.Text.Lazy as TL
 import qualified Debug.Trace as DT
 import qualified Filesystem as FS
 import qualified Filesystem.Path as FSP
@@ -109,6 +114,31 @@ createYesodPureScriptSite opts = do
 -- | For convenience: turns a path as list into a route.
 getPureScriptRoute :: [Text] -> Route PureScriptSite
 getPureScriptRoute p = PureScriptCompiledR p
+
+
+-- | Create JS error report that tries to insert itself into parent page.
+createJavaScriptError :: TL.Text -> TL.Text -> TL.Text
+createJavaScriptError errorDivId errorText = renderJavascriptUrl render tmpl
+    where
+        render _ _ = error "no links supported here"
+        _s _tl = AesonTypes.String (TL.toStrict _tl)
+        tmpl = [julius|
+                var err = #{_s errorText};
+                var errorDiv = document.getElementById(#{_s errorDivId});
+                if (window && window.console && window.console.log) {
+                    window.console.log(err);
+                }
+                if (errorDiv) {
+                    var errnode = document.createTextNode(err);
+                    var prenode = document.createElement("pre");
+                    prenode.appendChild(errnode);
+                    if (errorDiv.firstChild) {
+                        errorDiv.insertBefore(prenode, errorDiv.firstChild);
+                    } else {
+                        errorDiv.appendChild(errnode);
+                    }
+                }
+            |]
 
 
 getPureScriptInfo :: PureScriptSite -> PureScriptHandler TypedContent
@@ -204,8 +234,14 @@ getPureScriptCompiledR p = do
     compileResult <- liftIO $ compilePureScriptFile me jsModuleName
     case compileResult of
         Left err -> do
-            let errbs = T.encodeUtf8 err
-            return (TypedContent "text/plain" (toContent errbs))
+            case ypsErrorDivId (pssOptions me) of
+                Nothing -> do
+                    let errbs = T.encodeUtf8 err
+                    return (TypedContent "text/plain" (toContent errbs))
+                Just _id -> do
+                    let _errtxt = TL.fromStrict err
+                    let _errjs = createJavaScriptError (TL.fromStrict _id) _errtxt
+                    return (TypedContent "text/javascript" (toContent _errjs))
         Right js -> do
             let jsbs = T.encodeUtf8 js
             return (TypedContent "application/javascript" (toContent jsbs))
