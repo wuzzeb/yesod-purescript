@@ -1,4 +1,5 @@
 {-# LANGUAGE QuasiQuotes, TemplateHaskell, TypeFamilies, OverloadedStrings #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Yesod.PureScript.Data
 where
@@ -31,7 +32,7 @@ data PureScriptSiteState = PureScriptSiteState {
     }
 
 
--- | Yesod sub site for pure script.
+-- | Yesod sub site for PureScript.
 data PureScriptSite = PureScriptSite { pssState :: MVar PureScriptSiteState
                                      , pssOptions :: YesodPureScriptOptions }
 
