@@ -15,11 +15,10 @@
 module Yesod.PureScript (
     PureScriptSite,
     YesodPureScript,
-    YesodPureScriptOptions(YesodPureScriptOptions),
+    YesodPureScriptOptions(YesodPureScriptOptions, ypsErrorDivId),
     createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
     getPureScriptRoute,
-    ypsErrorDivId,
     ypsSourceDirectories
  )
 where
@@ -242,9 +241,9 @@ getPureScriptCompiledR p = do
                     let _errtxt = TL.fromStrict err
                     let _errjs = createJavaScriptError (TL.fromStrict _id) _errtxt
                     return (TypedContent "text/javascript" (toContent _errjs))
-        Right js -> do
-            let jsbs = T.encodeUtf8 js
-            return (TypedContent "application/javascript" (toContent jsbs))
+        Right _js -> do
+            let _jsbs = T.encodeUtf8 _js
+            return (TypedContent "application/javascript" (toContent _jsbs))
 
 
 -- | Called by file-watching thread after loading module from purs file.
@@ -280,18 +279,21 @@ removeModule pureScriptSite fileName = do
 -- | Executed on file change. Updates loaded modules MVar-ed in PureScriptSite.
 handleFileEvent :: PureScriptSite -> SFN.Event -> IO ()
 handleFileEvent pureScriptSite event = do
-        case event of
-            SFN.Added fp _ -> do
-                -- TIO.putStrLn "file added"
+        let fp = SFN.eventPath event
+        let mext0 = FSP.extension fp
+        let mext = DT.trace ("extension: " ++ show mext0) mext0
+        case (event, mext) of
+            (SFN.Added _ _, Just "purs") -> do
                 parsed <- parseFile (fp2t fp)
                 addModule pureScriptSite (fp2t fp) parsed
-            SFN.Modified fp _ -> do
-                -- TIO.putStrLn "file modified"
+            (SFN.Modified _ _, Just "purs") -> do
                 parsed <- parseFile (fp2t fp)
                 addModule pureScriptSite (fp2t fp) parsed
-            SFN.Removed fp _ -> do
-                -- TIO.putStrLn "file removed"
+            (SFN.Removed _ _, Just "purs") -> do
                 removeModule pureScriptSite (fp2t fp)
+            _ -> do
+                -- ignore this event
+                return ()
     where
         fp2t fp = case FSPC.toText fp of
             Left _ -> error "invalid path"
@@ -413,7 +415,7 @@ compilePureScriptFile pureScriptSite moduleName = do
                 let compileResultRaw = P.compile psOptions modules ["yesod-purescript"]
                 let compileResult = case compileResultRaw of
                         Left errStr -> Left (T.pack errStr)
-                        Right (js, _, _) -> Right (T.pack js)
+                        Right (_js, _, _) -> Right (T.pack _js)
                 let newmap = M.insert moduleName compileResult _m
                 let newstate = state { psStateCompiledModules = newmap }
                 return (newstate, compileResult)
