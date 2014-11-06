@@ -15,11 +15,11 @@
 module Yesod.PureScript (
     PureScriptSite,
     YesodPureScript,
-    YesodPureScriptOptions(YesodPureScriptOptions, ypsErrorDivId),
+    YesodPureScriptOptions(..),
     createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
     getPureScriptRoute,
-    ypsSourceDirectories
+    ypsoSourceDirectories
  )
 where
 
@@ -33,6 +33,9 @@ import Data.Either (rights)
 import Data.List (isSuffixOf)
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
+import Data.Time (UTCTime, getCurrentTime)
+import Formatting
+import Formatting.Time
 import Language.PureScript (Module(Module))
 import Prelude
 import System.FilePath ((</>))
@@ -57,7 +60,6 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
-import qualified Debug.Trace as DT
 import qualified Filesystem as FS
 import qualified Filesystem.Path as FSP
 import qualified Filesystem.Path.CurrentOS as FSPC
@@ -94,17 +96,21 @@ type PureScriptHandler a = (YesodPureScript master) => HandlerT PureScriptSite (
 -- Please don't create YesodPureScriptOptions by calling constructor directly,
 -- so I can add more options without breaking your code.
 defaultYesodPureScriptOptions :: YesodPureScriptOptions
-defaultYesodPureScriptOptions = YesodPureScriptOptions { ypsSourceDirectories = ["purs", "bower_components"]
-                                                       , ypsErrorDivId = Nothing }
+defaultYesodPureScriptOptions = YesodPureScriptOptions
+        { ypsoSourceDirectories = ["purs", "bower_components"]
+        , ypsoErrorDivId = Nothing
+        , ypsoVerboseErrors = False
+        , ypsoMode = Dynamic
+        , ypsoCompileOptions = [] }
 
 
 -- | Create pure script site.
 -- Initialises MVar of compiled modules to empty map.
 createYesodPureScriptSite :: YesodPureScriptOptions -> IO PureScriptSite
 createYesodPureScriptSite opts = do
-    let state = PureScriptSiteState { psStateWatchStarted = False
-                                    , psStateModules = M.empty
-                                    , psStateCompiledModules = M.empty }
+    let state = PureScriptSiteState { psssWatchStarted = False
+                                    , psssModules = M.empty
+                                    , psssCompiledModules = M.empty }
     mv <- CM.newMVar state
     return $ PureScriptSite { pssState = mv
                             , pssOptions = opts }
@@ -143,22 +149,27 @@ createJavaScriptError errorDivId errorText = renderJavascriptUrl render tmpl
 getPureScriptInfo :: PureScriptSite -> PureScriptHandler TypedContent
 getPureScriptInfo site = do
     -- map of filename to either err module
-    moduleMap <- liftIO $ CM.withMVar (pssState site) $ \state -> return (psStateModules state)
+    moduleMap <- liftIO $ CM.withMVar (pssState site) $ \state -> return (psssModules state)
 
-    -- (foo, Right bar) -> Just (foo, bar)
-    let _justRight (k, mv) = case mv of
-            Right v -> Just (k, v)
+    -- this is to filter map items whose values are tuples of (a0, Either ...),
+    -- and return those items with keys as tuples of (key, (a0, unboxed right)).
+    -- so this is pattern match on snd of tuple that either gives tuple of unboxed right in just or nothing...
+    let _justSndRight (_k, (_t, _mv)) = case _mv of
+            Right _v -> Just (_k, (_t, _v))
+            _ -> Nothing
+
+    -- similar to _justSndRight above, but returns value from Left (or nothing)
+    let _justSndLeft (_k, (_t, _mv)) = case _mv of
+            Left _v -> Just (_k, (_t, _v))
             _ -> Nothing
 
     -- (fn, [module])
-    let fnsmodules = mapMaybe _justRight (M.toAscList moduleMap)
-
-    let _justLeft (k, mv) = case mv of
-            Left v -> Just (k, v)
-            _ -> Nothing
+    let fnsmodules = mapMaybe _justSndRight (M.toAscList moduleMap) :: [(Text, (UTCTime, [Module]))]
 
     -- (fileName, error)
-    let fnerrs = mapMaybe _justLeft (M.toAscList moduleMap)
+    let fnerrs = mapMaybe _justSndLeft (M.toAscList moduleMap) :: [(Text, (UTCTime, Text))]
+
+    let _formatTime _t = format (dateDash % " " % hms) _t _t
 
     return $ toTypedContent $ [shamlet|
         $doctype 5
@@ -171,25 +182,6 @@ getPureScriptInfo site = do
             <body>
                 <h1>yesod-purescript Status
 
-                <h2>Loaded Modules
-
-                $case fnsmodules
-                    $of []
-                        <p>No modules loaded
-                    $of _
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>Module
-                                    <th>File name
-                            <tbody>
-                                $forall fnmods <- fnsmodules
-                                    $with (fn, modules) <- fnmods
-                                        $forall (Module name _ _) <- modules
-                                            <tr>
-                                                <td>#{show name}
-                                                <td>#{fn}
-
                 <h2>Failed Modules
 
                 $case fnerrs
@@ -201,12 +193,34 @@ getPureScriptInfo site = do
                                 <tr>
                                     <th>File name
                                     <th>Error message
+                                    <th>Load time
                             <tbody>
-                                $forall (fn, err) <- fnerrs
+                                $forall (fn, (time, err)) <- fnerrs
                                     <tr>
                                         <td>#{fn}
                                         <td>#{err}
+                                        <td>#{_formatTime time}
 
+                <h2>Loaded Modules
+
+                $case fnsmodules
+                    $of []
+                        <p>No modules loaded
+                    $of _
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Module
+                                    <th>File name
+                                    <th>Load time
+                            <tbody>
+                                $forall fnmods <- fnsmodules
+                                    $with (fn, (time, modules)) <- fnmods
+                                        $forall (Module name _ _) <- modules
+                                            <tr>
+                                                <td>#{show name}
+                                                <td>#{fn}
+                                                <td>#{_formatTime time}
         |]
     where
 
@@ -216,7 +230,6 @@ getPureScriptInfo site = do
 -- It takes a path to module as a list of Text, then it parses and
 -- compiles stuff and returns results to client.
 getPureScriptCompiledR :: [Text] -> PureScriptHandler TypedContent
-
 getPureScriptCompiledR [] = do
     me <- getYesod
     liftIO $ ensureWatchStarted me
@@ -226,14 +239,13 @@ getPureScriptCompiledR p = do
     me <- getYesod
     liftIO $ ensureWatchStarted me
     let jsModulePath = T.intercalate "." p  -- foo.bar.baz[.js]
-    let jsModuleName0 = if T.isSuffixOf ".js" jsModulePath
+    let jsModuleName = if T.isSuffixOf ".js" jsModulePath
             then T.dropEnd 3 jsModulePath
             else jsModulePath
-    let jsModuleName = DT.trace ("js module name: " ++ show jsModuleName0) jsModuleName0
     compileResult <- liftIO $ compilePureScriptFile me jsModuleName
     case compileResult of
         Left err -> do
-            case ypsErrorDivId (pssOptions me) of
+            case ypsoErrorDivId (pssOptions me) of
                 Nothing -> do
                     let errbs = T.encodeUtf8 err
                     return (TypedContent "text/plain" (toContent errbs))
@@ -248,18 +260,18 @@ getPureScriptCompiledR p = do
 
 -- | Called by file-watching thread after loading module from purs file.
 -- Updates in-memory cache of modules.
--- Result of compilation is either textual representation of reading errors or module.
+-- Result of compilation is either textual representation of parse errors or module.
 -- Cache of loaded modules is key-ed by purs filename - this way we can efficiently handle
 -- file deletions or renames.
-addModule :: PureScriptSite -> Text -> Either Text [P.Module] -> IO ()
+addModule :: PureScriptSite -> Text -> (UTCTime, Either Text [P.Module]) -> IO ()
 addModule pureScriptSite fileName eitherErrOrModules = do
     CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
-        let curmap = psStateModules state
+        let curmap = psssModules state
         let newmap = M.insert fileName eitherErrOrModules curmap
         -- For now re-loading of module causes cache all compiled modules to be
         -- dropped.
-        let newstate = state { psStateModules = newmap
-                             , psStateCompiledModules = M.empty }
+        let newstate = state { psssModules = newmap
+                             , psssCompiledModules = M.empty }
         return newstate
 
 
@@ -268,10 +280,10 @@ addModule pureScriptSite fileName eitherErrOrModules = do
 removeModule :: PureScriptSite -> Text -> IO ()
 removeModule pureScriptSite fileName = do
     CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
-        let curmap = psStateModules state
+        let curmap = psssModules state
         let newmap = M.delete fileName curmap
-        let newstate = state { psStateModules = newmap
-                             , psStateCompiledModules = M.empty }
+        let newstate = state { psssModules = newmap
+                             , psssCompiledModules = M.empty }
         return newstate
 
 
@@ -280,15 +292,14 @@ removeModule pureScriptSite fileName = do
 handleFileEvent :: PureScriptSite -> SFN.Event -> IO ()
 handleFileEvent pureScriptSite event = do
         let fp = SFN.eventPath event
-        let mext0 = FSP.extension fp
-        let mext = DT.trace ("extension: " ++ show mext0) mext0
+        let mext = FSP.extension fp
+        let _upsert = do
+                _parsed <- parseFile (fp2t fp)
+                _now <- getCurrentTime
+                addModule pureScriptSite (fp2t fp) (_now, _parsed)
         case (event, mext) of
-            (SFN.Added _ _, Just "purs") -> do
-                parsed <- parseFile (fp2t fp)
-                addModule pureScriptSite (fp2t fp) parsed
-            (SFN.Modified _ _, Just "purs") -> do
-                parsed <- parseFile (fp2t fp)
-                addModule pureScriptSite (fp2t fp) parsed
+            (SFN.Added _ _, Just "purs") -> _upsert
+            (SFN.Modified _ _, Just "purs") -> _upsert
             (SFN.Removed _ _, Just "purs") -> do
                 removeModule pureScriptSite (fp2t fp)
             _ -> do
@@ -303,15 +314,19 @@ handleFileEvent pureScriptSite event = do
 -- | Start file-watching stuff if not already started.
 ensureWatchStarted :: PureScriptSite -> IO ()
 ensureWatchStarted pureScriptSite = do
-    CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
-        case psStateWatchStarted state of
-            False -> do
-                _m <- parseAllFiles pureScriptSite
-                startWatchThread pureScriptSite
-                return (state { psStateWatchStarted = True
-                              , psStateModules = _m
-                              , psStateCompiledModules = M.empty })
-            _ -> return state
+    let mode = ypsoMode $ pssOptions pureScriptSite
+    case mode of
+        Dynamic -> do
+            CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
+                case psssWatchStarted state of
+                    False -> do
+                        _m <- parseAllFiles pureScriptSite
+                        startWatchThread pureScriptSite
+                        return (state { psssWatchStarted = True
+                                      , psssModules = _m
+                                      , psssCompiledModules = M.empty })
+                    _ -> return state
+        Static -> error "YPS mode is Static, can't start watch thread"
 
 
 -- | Creates thread that watches input dirs and fires events on files.
@@ -320,7 +335,7 @@ startWatchThread :: PureScriptSite -> IO ()
 startWatchThread pureScriptSite = do
         _ <- C.forkIO $ do
             let opts = pssOptions pureScriptSite
-            let dirs = ypsSourceDirectories opts
+            let dirs = ypsoSourceDirectories opts
             SFN.withManager $ \mgr -> do
                 forM_ dirs $ \dir -> do
                     SFN.watchTree mgr (FSPC.fromText dir) (const True) $ \e -> do
@@ -370,54 +385,58 @@ parseFile fn = do
 -- This beautiful code tries to make sure that paths are absolute.
 -- Current impl uses Filesystem.FilePath in hopes that it's faster than String-based impl and
 -- that it handles edge cases better.
-parseAllFiles :: PureScriptSite -> IO (M.Map Text (Either Text [P.Module]))
+parseAllFiles :: PureScriptSite -> IO (M.Map Text (UTCTime, Either Text [P.Module]))
 parseAllFiles pureScriptSite = do
-    let sourceDirs = ypsSourceDirectories $ pssOptions pureScriptSite
+    let sourceDirs = ypsoSourceDirectories $ pssOptions pureScriptSite
     let lsActions = map (\d -> findFiles d) sourceDirs
     dirsFiles <- sequence lsActions
     let relFileNames = map FSPC.fromText $ concat dirsFiles
     cwd <- FS.getWorkingDirectory
     let absFileNames = map (FSP.append cwd) relFileNames
-    mParseResults <- forM  absFileNames $ \afn -> do
+    mParseResults <- forM absFileNames $ \afn -> do
         case FSPC.toText afn of
             Left _ -> return Nothing
             Right _t -> do
-                _p <- parseFile _t
-                return $ Just (_t, _p)
+                _time <- getCurrentTime
+                _parsed <- parseFile _t
+                return $ Just (_t, (_time, _parsed))
     let parseResults = catMaybes mParseResults
     return $ M.fromList $ parseResults
 
 
 -- | Takes PureScriptSite and module name and tries to compile given module in "--main <module>" mode.
 -- PureScriptSite contains parsed modules.
+-- Compiled module is stored (cached) in PureScriptSite's state with time of compilation.
+-- Only compile result is returned.
+-- Cached and returned result of compilation has type of Text.
 compilePureScriptFile :: PureScriptSite -> Text -> IO (Either Text Text)
 compilePureScriptFile pureScriptSite moduleName = do
     let compileOptions = P.CompileOptions "PS" [T.unpack moduleName] []
     let psOptions = P.defaultCompileOptions { P.optionsMain = Just (T.unpack moduleName)
-                                            , P.optionsPerformRuntimeTypeChecks = False  -- XXX exception in generated code when enabled
                                             , P.optionsNoPrelude = False
                                             , P.optionsAdditional = compileOptions
-                                            , P.optionsVerboseErrors = True }
+                                            , P.optionsVerboseErrors = ypsoVerboseErrors (pssOptions pureScriptSite) }
     modules <- CM.withMVar (pssState pureScriptSite) $ \state -> do
-        let _m = (psStateModules state)
-        let _values = M.elems _m
+        let _m = (psssModules state)
+        let _values = map snd $ M.elems _m
         let modules = concat (rights _values)
         return modules
     compileResult <- CM.modifyMVar (pssState pureScriptSite) $ \state -> do
-        let _m = (psStateCompiledModules state)
+        let _m = psssCompiledModules state
         case M.lookup moduleName _m of
-            Just r -> do
+            Just (_t, _cmt) -> do
                 TIO.putStrLn $ T.concat ["compile result for js module \"", moduleName, "\" found in cache"]
-                return (state, r)
+                return (state, _cmt)
             Nothing -> do
                 TIO.putStrLn $ T.concat ["compiling js module \"", moduleName, "\""]
+                _time <- getCurrentTime
                 -- No cached compile result in map, need to actually compile.
                 let compileResultRaw = P.compile psOptions modules ["yesod-purescript"]
                 let compileResult = case compileResultRaw of
                         Left errStr -> Left (T.pack errStr)
                         Right (_js, _, _) -> Right (T.pack _js)
-                let newmap = M.insert moduleName compileResult _m
-                let newstate = state { psStateCompiledModules = newmap }
+                let newmap = M.insert moduleName (_time, compileResult) _m
+                let newstate = state { psssCompiledModules = newmap }
                 return (newstate, compileResult)
     return compileResult
 
