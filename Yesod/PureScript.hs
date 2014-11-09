@@ -18,8 +18,7 @@ module Yesod.PureScript (
     YesodPureScriptOptions(..),
     createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
-    getPureScriptRoute,
-    ypsoSourceDirectories
+    getPureScriptRoute
  )
 where
 
