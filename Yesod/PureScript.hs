@@ -415,11 +415,6 @@ compilePureScriptFile pureScriptSite moduleName = do
                                             , P.optionsNoPrelude = False
                                             , P.optionsAdditional = compileOptions
                                             , P.optionsVerboseErrors = ypsoVerboseErrors (pssOptions pureScriptSite) }
-    modules <- CM.withMVar (pssState pureScriptSite) $ \state -> do
-        let _m = (psssModules state)
-        let _values = map snd $ M.elems _m
-        let modules = concat (rights _values)
-        return modules
     compileResult <- CM.modifyMVar (pssState pureScriptSite) $ \state -> do
         let _m = psssCompiledModules state
         case M.lookup moduleName _m of
@@ -430,7 +425,13 @@ compilePureScriptFile pureScriptSite moduleName = do
                 TIO.putStrLn $ T.concat ["compiling js module \"", moduleName, "\""]
                 _time <- getCurrentTime
                 -- No cached compile result in map, need to actually compile.
-                let compileResultRaw = P.compile psOptions modules ["yesod-purescript"]
+                let _lmm = psssModules state
+                let _preludeModules = case P.runIndentParser "" P.parseModules P.prelude of
+                        Right _ms -> _ms
+                        Left _err -> []
+                let _loadedModules = concat $ rights $ map snd $ M.elems _lmm
+                let _modules = concat [_preludeModules, _loadedModules]
+                let compileResultRaw = P.compile psOptions _modules ["yesod-purescript"]
                 let compileResult = case compileResultRaw of
                         Left errStr -> Left (T.pack errStr)
                         Right (_js, _, _) -> Right (T.pack _js)
