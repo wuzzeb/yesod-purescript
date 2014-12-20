@@ -1,7 +1,7 @@
 
 # yesod-purescript
 
-Work in progress integration of PureScript (purescript.org) into Yesod.
+Work in progress integration of PureScript (see https://www.purescript.org) into Yesod.
 
 
 Goals:
@@ -25,7 +25,7 @@ Goals:
 See https://github.com/mpietrzak/yesod-purescript-sample/.
 
 The easiest way is to look at second commit in sample's repo:
-https://github.com/mpietrzak/yesod-purescript-sample/commit/555597f92bc4e5c097f4bdff793b39465260ca07
+https://github.com/mpietrzak/yesod-purescript-sample/commit/6e026b63deac97ac55c710e8fcf1f4e550a07bb3
 
 To use yesod-purescript, you have to:
 
@@ -35,7 +35,7 @@ To use yesod-purescript, you have to:
 3. add subsite route to PureScriptSite,
 4. put your purs files in configured subdirectories of your project;
    by default those directories are:
-   - `purs` - your code here and copy of `prelude.purs` from purescript package,
+   - `purs` - your code,
    - `bower_components` - dependencies (since most likely you'll use bower to get those).
 5. Reference your code in HTML pages.
 
@@ -62,11 +62,11 @@ First add `Yesod.PureScrtipt` import to this file.
 
 Notice fields in your App data like:
 
-`getStatic :: Static`
+`appLogger :: Logger`
 
 Add similar line for PureScript at the end:
 
-`getPureScriptSite :: PureScriptSite`.
+`appPureScript :: PureScriptSite`.
 
 Then add instance of YesodPureScript: `instance YesodPureScript App`.
 You can add this after all other instances (order does not really matter).
@@ -74,44 +74,39 @@ You can add this after all other instances (order does not really matter).
 Go to `Application.hs`:
 
 - add import of `Yesod.PureScript`,
-- find `makeFoundation`,
-  - add `purs <- createYesodPureScriptSite def`
-  - add `purs` value to `foundation = (...)` definition.
-
-For example, by default `yesod init` for PostgreSQL generates this line:
-
-`foundation = App conf s p manager dbconf logger`
-
-and you should just add `purs` at the end:
-
-`foundation = App conf s p manager dbconf logger purs`.
+- find `makeFoundation` function,
+  - add `appPureScript <- createYesodPureScriptSite def` close to top of this function.
 
 
 ### 3. Add subsite route
 
 Add this line to `config/routes` after auth route definition:
 
-`/purs PureScriptR PureScriptSite getPureScriptSite`
+`/purs PureScriptR PureScriptSite appPureScript`
 
 This attaches Yesod PureScript Subsite at /purs.
-Opening http://localhost:3000/purs/Foo.js will try to
+Opening url http://localhost:3000/purs/Foo.js will try to
 find and compile module Foo.
+
+There's also status page at http://localhost:3000/purs which lists
+loaded modules and module loading errors (if any).
 
 
 ### 4. Purs files
 
 Put Hello.purs in purs subdirectory:
 
-    module Hello where
+    module Hello (main)
+    where
 
     import Control.Monad.Eff
 
     foreign import log
-    "function log(s) { \
-    \  return function() { \
-    \    return window.console.log(s); \
-    \  }; \
-    \}" :: forall eff. String -> Eff eff {}
+    """function log(s) {
+        return function() {
+            return window.console.log(s);
+        };
+    }""" :: forall eff. String -> Eff eff {}
 
     main = log "hello"
 
