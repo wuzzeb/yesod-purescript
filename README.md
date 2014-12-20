@@ -115,9 +115,6 @@ Put Hello.purs in purs subdirectory:
 
     main = log "hello"
 
-Copy prelude.purs from purescript package to purs dir (most likely it's
-somewhere in ./.cabal-sandbox/share/.../purescript-.../prelude/prelude.purs).
-
 Create empty `bower_components` dir in your project dir.
 
 Start dev server and open http://localhost:3000/purs/Hello.js.
