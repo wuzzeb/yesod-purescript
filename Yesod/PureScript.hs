@@ -372,7 +372,9 @@ parseFile :: Text -> IO (Either Text [P.Module])
 parseFile fn = do
     -- TIO.putStrLn $ T.concat ["parsing \"", fn, "\""]
     fileContents <- U.readFile (T.unpack fn)
-    let eem = P.runIndentParser (T.unpack fn) P.parseModules fileContents
+    let eem = case P.lex (T.unpack fn) fileContents of
+            Right _tokens -> P.runTokenParser (T.unpack fn) P.parseModules _tokens
+            Left _err -> Left _err
     let r = case eem of
             Left _e -> Left . T.pack . show $ _e
             Right m -> Right m
@@ -426,8 +428,10 @@ compilePureScriptFile pureScriptSite moduleName = do
                 _time <- getCurrentTime
                 -- No cached compile result in map, need to actually compile.
                 let _lmm = psssModules state
-                let _preludeModules = case P.runIndentParser "" P.parseModules P.prelude of
-                        Right _ms -> _ms
+                let _preludeModules = case P.lex "" P.prelude of
+                        Right _tokens -> case P.runTokenParser "" P.parseModules _tokens of
+                            Right _ms -> _ms
+                            Left _err -> []
                         Left _err -> []
                 let _loadedModules = concat $ rights $ map snd $ M.elems _lmm
                 let _modules = concat [_preludeModules, _loadedModules]
