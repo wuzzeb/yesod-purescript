@@ -16,6 +16,7 @@ module Yesod.PureScript (
     PureScriptSite,
     YesodPureScript,
     YesodPureScriptOptions(..),
+    addPureScriptWidget,
     createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
     getPureScriptRoute
@@ -25,6 +26,7 @@ where
 -- PureScript Yesod Subsite
 -- goal is to serve eg ./purs/foo.purs file at /purs/foo.js url.
 
+import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException)
 import Control.Monad (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
@@ -33,12 +35,15 @@ import Data.List (isSuffixOf)
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime, getCurrentTime)
+import Filesystem.Path ((</>))
 import Formatting
 import Formatting.Time
+import Language.Haskell.TH
 import Language.PureScript (Module(Module))
 import Prelude
-import System.FilePath ((</>))
 import Text.Julius
+import Text.Regex.TDFA ((=~))
+import Text.Regex.TDFA.Text ()
 import Yesod.Core ( HandlerT
                   , Route
                   , TypedContent (TypedContent)
@@ -49,6 +54,7 @@ import Yesod.Core ( HandlerT
                   , shamlet
                   , toContent
                   , toTypedContent
+                  , toWidget
                   , yesodSubDispatch )
 import qualified Control.Concurrent as C
 import qualified Control.Concurrent.MVar as CM
@@ -63,9 +69,9 @@ import qualified Filesystem as FS
 import qualified Filesystem.Path as FSP
 import qualified Filesystem.Path.CurrentOS as FSPC
 import qualified Language.PureScript as P
-import qualified System.Directory as D
 import qualified System.FSNotify as SFN
 import qualified System.IO.UTF8 as U
+
 
 import Yesod.PureScript.Data
 
@@ -97,6 +103,7 @@ type PureScriptHandler a = (YesodPureScript master) => HandlerT PureScriptSite (
 defaultYesodPureScriptOptions :: YesodPureScriptOptions
 defaultYesodPureScriptOptions = YesodPureScriptOptions
         { ypsoSourceDirectories = ["purs", "bower_components"]
+        , ypsoSourceIgnores = []
         , ypsoErrorDivId = Nothing
         , ypsoVerboseErrors = False
         , ypsoMode = Dynamic
@@ -163,12 +170,16 @@ getPureScriptInfo site = do
             _ -> Nothing
 
     -- (fn, [module])
-    let fnsmodules = mapMaybe _justSndRight (M.toAscList moduleMap) :: [(Text, (UTCTime, [Module]))]
+    let fnsmodules = mapMaybe _justSndRight (M.toAscList moduleMap) :: [(FSP.FilePath, (UTCTime, [Module]))]
 
     -- (fileName, error)
-    let fnerrs = mapMaybe _justSndLeft (M.toAscList moduleMap) :: [(Text, (UTCTime, Text))]
+    let fnerrs = mapMaybe _justSndLeft (M.toAscList moduleMap) :: [(FSP.FilePath, (UTCTime, Text))]
 
     let _formatTime _t = format (dateDash % " " % hms) _t _t
+
+    let filePathToText fp = case FSPC.toText fp of
+            Left _t -> _t
+            Right _t -> _t
 
     return $ toTypedContent $ [shamlet|
         $doctype 5
@@ -196,7 +207,7 @@ getPureScriptInfo site = do
                             <tbody>
                                 $forall (fn, (time, err)) <- fnerrs
                                     <tr>
-                                        <td>#{fn}
+                                        <td>#{filePathToText fn}
                                         <td>#{err}
                                         <td>#{_formatTime time}
 
@@ -218,7 +229,7 @@ getPureScriptInfo site = do
                                         $forall (Module name _ _) <- modules
                                             <tr>
                                                 <td>#{show name}
-                                                <td>#{fn}
+                                                <td>#{filePathToText fn}
                                                 <td>#{_formatTime time}
         |]
     where
@@ -262,7 +273,7 @@ getPureScriptCompiledR p = do
 -- Result of compilation is either textual representation of parse errors or module.
 -- Cache of loaded modules is key-ed by purs filename - this way we can efficiently handle
 -- file deletions or renames.
-addModule :: PureScriptSite -> Text -> (UTCTime, Either Text [P.Module]) -> IO ()
+addModule :: PureScriptSite -> FSPC.FilePath -> (UTCTime, Either Text [P.Module]) -> IO ()
 addModule pureScriptSite fileName eitherErrOrModules = do
     CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
         let curmap = psssModules state
@@ -276,7 +287,7 @@ addModule pureScriptSite fileName eitherErrOrModules = do
 
 -- | Executed when file disappears from watched dirs,
 -- removes module from PureScriptSite's state.
-removeModule :: PureScriptSite -> Text -> IO ()
+removeModule :: PureScriptSite -> FSP.FilePath -> IO ()
 removeModule pureScriptSite fileName = do
     CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
         let curmap = psssModules state
@@ -286,28 +297,20 @@ removeModule pureScriptSite fileName = do
         return newstate
 
 
-
 -- | Executed on file change. Updates loaded modules MVar-ed in PureScriptSite.
 handleFileEvent :: PureScriptSite -> SFN.Event -> IO ()
 handleFileEvent pureScriptSite event = do
         let fp = SFN.eventPath event
         let mext = FSP.extension fp
         let _upsert = do
-                _parsed <- parseFile (fp2t fp)
+                _parsed <- parseFile fp
                 _now <- getCurrentTime
-                addModule pureScriptSite (fp2t fp) (_now, _parsed)
+                addModule pureScriptSite fp (_now, _parsed)
         case (event, mext) of
             (SFN.Added _ _, Just "purs") -> _upsert
             (SFN.Modified _ _, Just "purs") -> _upsert
-            (SFN.Removed _ _, Just "purs") -> do
-                removeModule pureScriptSite (fp2t fp)
-            _ -> do
-                -- ignore this event
-                return ()
-    where
-        fp2t fp = case FSPC.toText fp of
-            Left _ -> error "invalid path"
-            Right _t -> _t
+            (SFN.Removed _ _, Just "purs") -> do removeModule pureScriptSite fp
+            _ -> return ()
 
 
 -- | Start file-watching stuff if not already started.
@@ -319,7 +322,7 @@ ensureWatchStarted pureScriptSite = do
             CM.modifyMVar_ (pssState pureScriptSite) $ \state -> do
                 case psssWatchStarted state of
                     False -> do
-                        _m <- parseAllFiles pureScriptSite
+                        _m <- parseSiteFiles pureScriptSite
                         startWatchThread pureScriptSite
                         return (state { psssWatchStarted = True
                                       , psssModules = _m
@@ -349,61 +352,94 @@ startWatchThread pureScriptSite = do
         return ()
 
 
--- | Take human-readable dir name, find '*.purs' files recursively.
-findFiles :: Text -> IO [Text]
-findFiles dir = do
-    let dirp = T.unpack dir
-    allNames <- D.getDirectoryContents dirp
-    let goodNames = filter (flip notElem [".", ".."]) allNames
+matchPath :: Text -> FSP.FilePath -> Bool
+matchPath pattern path = case FSPC.toText path of
+        Left _t -> False
+        Right _t -> _t =~ pattern
+
+
+matchPathAny :: [Text] -> FSP.FilePath -> Bool
+matchPathAny patterns path = any (flip matchPath path) patterns
+
+
+matchPathNone :: [Text] -> FSP.FilePath -> Bool
+matchPathNone ignores path = not $ matchPathAny ignores path
+
+
+-- | Take directory FilePath, find '*.purs' files recursively.
+findFiles :: [Text] -> FSPC.FilePath -> IO [FSPC.FilePath]
+findFiles ignores dir = do
+    allNames <- FS.listDirectory dir -- listdir foo will return foo/bar if bar is in foo, path not just name
+    let goodNames = filter (matchPathNone ignores) $ filter (flip notElem [".", ".."]) allNames
     pathLists <- forM goodNames $ \n -> do
-        let p = dirp </> n
-        isDir <- D.doesDirectoryExist p
+        isDir <- FS.isDirectory n
         if isDir
-            then findFiles (T.pack p)
-            else return $ if isSuffixOf ".purs" p then [T.pack p] else []
-    let paths = (concat pathLists)
+            then findFiles ignores n
+            else do
+                return $ if FSP.hasExtension n "purs" then [n] else []
+    let paths = concat pathLists
     return paths
 
 
 -- | High level parse interface for PureScript.
 -- Takes file path as Text, returns either error as Text or parsed modules.
 -- Note: PureScript file can define more than one module.
-parseFile :: Text -> IO (Either Text [P.Module])
+parseFile :: FSP.FilePath -> IO (Either Text [P.Module])
 parseFile fn = do
-    -- TIO.putStrLn $ T.concat ["parsing \"", fn, "\""]
-    fileContents <- U.readFile (T.unpack fn)
-    let eem = case P.lex (T.unpack fn) fileContents of
-            Right _tokens -> P.runTokenParser (T.unpack fn) P.parseModules _tokens
+    let fns = FSPC.encodeString fn
+    fileContents <- U.readFile fns
+    let eem = case P.lex fns fileContents of
+            Right _tokens -> P.runTokenParser fns P.parseModules _tokens
             Left _err -> Left _err
     let r = case eem of
             Left _e -> Left . T.pack . show $ _e
             Right m -> Right m
-    -- TIO.putStrLn $ T.concat ["parsed \"", fn, "\""]
     return r
 
 
--- | Parse modules, return map of path -> parse result: either parse error or parsed modules.
--- This beautiful code tries to make sure that paths are absolute.
--- Current impl uses Filesystem.FilePath in hopes that it's faster than String-based impl and
--- that it handles edge cases better.
-parseAllFiles :: PureScriptSite -> IO (M.Map Text (UTCTime, Either Text [P.Module]))
-parseAllFiles pureScriptSite = do
-    let sourceDirs = ypsoSourceDirectories $ pssOptions pureScriptSite
-    let lsActions = map (\d -> findFiles d) sourceDirs
-    dirsFiles <- sequence lsActions
-    let relFileNames = map FSPC.fromText $ concat dirsFiles
-    cwd <- FS.getWorkingDirectory
-    let absFileNames = map (FSP.append cwd) relFileNames
-    mParseResults <- forM absFileNames $ \afn -> do
-        case FSPC.toText afn of
-            Left _ -> return Nothing
-            Right _t -> do
-                _time <- getCurrentTime
-                _parsed <- parseFile _t
-                return $ Just (_t, (_time, _parsed))
-    let parseResults = catMaybes mParseResults
+-- | Find files in directories and parse them.
+parseFiles :: [FSP.FilePath] -> [Text] -> IO (M.Map FSPC.FilePath (UTCTime, Either Text [P.Module]))
+parseFiles dirs ignores = do
+    let lsActions = map (findFiles ignores) dirs
+    filenames <- concat <$> sequence lsActions
+    _time <- getCurrentTime
+    parseResults <- forM filenames $ \fn -> do
+        _parsed <- parseFile fn
+        return (fn, (_time, _parsed))
     return $ M.fromList $ parseResults
 
+
+-- | Parse modules, return map of path -> parse result: either parse error or parsed modules.
+-- Current impl uses Filesystem.FilePath in hopes that it's faster than String-based impl and
+-- that it handles edge cases better.
+parseSiteFiles :: PureScriptSite -> IO (M.Map FSPC.FilePath (UTCTime, Either Text [P.Module]))
+parseSiteFiles pureScriptSite = parseFiles dirs ignores
+    where
+        ypso = pssOptions pureScriptSite
+        dirs = map FSPC.fromText $ ypsoSourceDirectories ypso :: [FSP.FilePath]
+        ignores = ypsoSourceIgnores ypso :: [Text]
+
+
+preludeModules :: [P.Module]
+preludeModules = case P.lex "" P.prelude of
+        Right _tokens -> case P.runTokenParser "" P.parseModules _tokens of
+            Right _ms -> _ms
+            Left _err -> []
+        Left _err -> []
+
+
+-- | Compile PureScript modules in "--main <module>" mode.
+compilePureScript :: YesodPureScriptOptions -> [Module] -> Text -> Either Text Text
+compilePureScript ypso modules mainModuleName = case _result of
+        Left _err -> Left (T.pack _err)
+        Right (_js, _, _) -> Right (T.pack _js)
+    where
+        _result = P.compile _psOptions modules ["yesod-purescript"]
+        _psOptions = P.defaultCompileOptions { P.optionsMain = Just (T.unpack mainModuleName)
+                                             , P.optionsNoPrelude = False
+                                             , P.optionsAdditional = _compileOptions
+                                             , P.optionsVerboseErrors = ypsoVerboseErrors ypso }
+        _compileOptions = P.CompileOptions "PS" [T.unpack mainModuleName] []
 
 -- | Takes PureScriptSite and module name and tries to compile given module in "--main <module>" mode.
 -- PureScriptSite contains parsed modules.
@@ -412,11 +448,6 @@ parseAllFiles pureScriptSite = do
 -- Cached and returned result of compilation has type of Text.
 compilePureScriptFile :: PureScriptSite -> Text -> IO (Either Text Text)
 compilePureScriptFile pureScriptSite moduleName = do
-    let compileOptions = P.CompileOptions "PS" [T.unpack moduleName] []
-    let psOptions = P.defaultCompileOptions { P.optionsMain = Just (T.unpack moduleName)
-                                            , P.optionsNoPrelude = False
-                                            , P.optionsAdditional = compileOptions
-                                            , P.optionsVerboseErrors = ypsoVerboseErrors (pssOptions pureScriptSite) }
     compileResult <- CM.modifyMVar (pssState pureScriptSite) $ \state -> do
         let _m = psssCompiledModules state
         case M.lookup moduleName _m of
@@ -428,19 +459,29 @@ compilePureScriptFile pureScriptSite moduleName = do
                 _time <- getCurrentTime
                 -- No cached compile result in map, need to actually compile.
                 let _lmm = psssModules state
-                let _preludeModules = case P.lex "" P.prelude of
-                        Right _tokens -> case P.runTokenParser "" P.parseModules _tokens of
-                            Right _ms -> _ms
-                            Left _err -> []
-                        Left _err -> []
                 let _loadedModules = concat $ rights $ map snd $ M.elems _lmm
-                let _modules = concat [_preludeModules, _loadedModules]
-                let compileResultRaw = P.compile psOptions _modules ["yesod-purescript"]
-                let compileResult = case compileResultRaw of
-                        Left errStr -> Left (T.pack errStr)
-                        Right (_js, _, _) -> Right (T.pack _js)
+                let _modules = concat [preludeModules, _loadedModules]
+                let compileResult = compilePureScript (pssOptions pureScriptSite) _modules moduleName
                 let newmap = M.insert moduleName (_time, compileResult) _m
                 let newstate = state { psssCompiledModules = newmap }
                 return (newstate, compileResult)
     return compileResult
+
+
+-- | PureScript Template Haskell
+addPureScriptWidget :: YesodPureScriptOptions -> Text -> Q Exp
+addPureScriptWidget ypso moduleName = do
+    let dirs = map FSPC.fromText $ ypsoSourceDirectories ypso
+    let ignores = ypsoSourceIgnores ypso
+    parsed <- runIO $ parseFiles dirs ignores
+    -- parsed is a crazy struct and for now we need only list of modules
+    let parsedModules = concat $ catMaybes $ flip map (M.elems parsed) $ \(_, e) -> case e of
+            Left _ -> Nothing
+            Right _modules -> Just _modules
+    let modules = concat [preludeModules, parsedModules]
+    compiled <- case compilePureScript ypso modules moduleName of
+            Left _err -> fail $ "Failed to compile PureScript module \"" ++ show moduleName ++ "\": " ++ show _err
+            Right _js -> return _js
+    let thLit = litE $ stringL $ T.unpack compiled -- this is string literal we can insert at TH call site
+    [|toWidget $ toJavascript $ rawJS $ T.pack $(thLit)|]
 

@@ -11,6 +11,7 @@ import Data.Time (UTCTime)
 import Yesod.Core
 
 import qualified Data.Map.Strict as M
+import qualified Filesystem.Path as FSP
 import qualified Language.PureScript as P
 
 
@@ -27,6 +28,8 @@ data YesodPureScriptOptions = YesodPureScriptOptions {
         ypsoMode :: Mode,
         -- | Source directories to look for ".purs" files.
         ypsoSourceDirectories :: [Text],
+        -- | Ignores, list of regexps that prevent parsing.
+        ypsoSourceIgnores :: [Text],
         -- | Defines what and how to compile.
         ypsoCompileOptions :: [CompileOptions],
         -- | Optionally specifies div id in parent page that will be used to display compilation error if any.
@@ -45,7 +48,7 @@ data PureScriptSiteState = PureScriptSiteState {
 
         -- | Results of file parsing, time and either errors as text or list of modules,
         -- keyed by file path.
-        psssModules :: M.Map Text (UTCTime, (Either Text [P.Module])),
+        psssModules :: M.Map FSP.FilePath (UTCTime, (Either Text [P.Module])),
 
         -- | Cached modules compiled with "module" and "main" options to Text.
         -- Result of compilation is either compile error(s) as Text or
