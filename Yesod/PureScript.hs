@@ -59,10 +59,11 @@ import Yesod.Core ( HandlerT
 import qualified Control.Concurrent as C
 import qualified Control.Concurrent.MVar as CM
 import qualified Data.Aeson.Types as AesonTypes
+import qualified Data.ByteString as BS
 import qualified Data.Default as DD
 import qualified Data.Map.Strict as M
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
+import qualified Data.Text.Encoding as TE
 import qualified Data.Text.IO as TIO
 import qualified Data.Text.Lazy as TL
 import qualified Filesystem as FS
@@ -70,7 +71,6 @@ import qualified Filesystem.Path as FSP
 import qualified Filesystem.Path.CurrentOS as FSPC
 import qualified Language.PureScript as P
 import qualified System.FSNotify as SFN
-import qualified System.IO.UTF8 as U
 
 
 import Yesod.PureScript.Data
@@ -257,14 +257,14 @@ getPureScriptCompiledR p = do
         Left err -> do
             case ypsoErrorDivId (pssOptions me) of
                 Nothing -> do
-                    let errbs = T.encodeUtf8 err
+                    let errbs = TE.encodeUtf8 err
                     return (TypedContent "text/plain" (toContent errbs))
                 Just _id -> do
                     let _errtxt = TL.fromStrict err
                     let _errjs = createJavaScriptError (TL.fromStrict _id) _errtxt
                     return (TypedContent "text/javascript" (toContent _errjs))
         Right _js -> do
-            let _jsbs = T.encodeUtf8 _js
+            let _jsbs = TE.encodeUtf8 _js
             return (TypedContent "application/javascript" (toContent _jsbs))
 
 
@@ -387,7 +387,7 @@ findFiles ignores dir = do
 parseFile :: FSP.FilePath -> IO (Either Text [P.Module])
 parseFile fn = do
     let fns = FSPC.encodeString fn
-    fileContents <- U.readFile fns
+    fileContents <- T.unpack <$> TE.decodeUtf8 <$> BS.readFile fns
     let eem = case P.lex fns fileContents of
             Right _tokens -> P.runTokenParser fns P.parseModules _tokens
             Left _err -> Left _err
