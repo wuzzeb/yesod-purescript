@@ -19,7 +19,8 @@ module Yesod.PureScript (
     addPureScriptWidget,
     createYesodPureScriptSite,
     defaultYesodPureScriptOptions,
-    getPureScriptRoute
+    getPureScriptRoute,
+    yesodPureScript
  )
 where
 
@@ -49,6 +50,7 @@ import Yesod.Core ( HandlerT
                   , TypedContent (TypedContent)
                   , Yesod
                   , YesodSubDispatch
+                  , addScript
                   , getYesod
                   , mkYesodSubDispatch
                   , shamlet
@@ -484,4 +486,16 @@ addPureScriptWidget ypso moduleName = do
             Right _js -> return _js
     let thLit = litE $ stringL $ T.unpack compiled -- this is string literal we can insert at TH call site
     [|toWidget $ toJavascript $ rawJS $ T.pack $(thLit)|]
+
+
+-- | Either add link to dynamically compiled PureScript or return statically compiled PureScript.
+-- yesodPureScript :: Bool -> Route -> YesodPureScriptOptions -> Text -> Q Exp
+yesodPureScript dev routeName ypso moduleName =
+        if dev then
+            [|addScript $ $(conE routeName) $ getPureScriptRoute $ map T.pack [$(thModuleNameStrLit)]|]
+        else
+            addPureScriptWidget ypso moduleName
+    where
+        thModuleNameStrLit = litE $ stringL $ T.unpack moduleName
+
 
