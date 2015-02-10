@@ -24,12 +24,9 @@ library
                  , bytestring
                  , containers
                  , data-default
-                 , directory
-                 , filepath
                  , formatting
                  , fsnotify
-                 , parsec
-                 , purescript >= 0.6.4 && < 0.6.6
+                 , purescript >= 0.6.4 && < 0.6.7
                  , regex-tdfa
                  , regex-tdfa-text
                  , shakespeare >= 2
