@@ -32,7 +32,6 @@ import Control.Exception (catch, SomeException)
 import Control.Monad (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
 import Data.Either (rights)
-import Data.List (isSuffixOf)
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime, getCurrentTime)
@@ -247,6 +246,7 @@ getPureScriptCompiledR [] = do
     liftIO $ ensureWatchStarted me
     getPureScriptInfo me
 
+
 getPureScriptCompiledR p = do
     me <- getYesod
     liftIO $ ensureWatchStarted me
@@ -299,10 +299,21 @@ removeModule pureScriptSite fileName = do
         return newstate
 
 
+-- | Calculate relative path.
+-- Both parameters must be absolute paths, the first one must be directory path.
+relpath :: FSP.FilePath -> FSP.FilePath -> FSP.FilePath
+relpath base absolute =
+    case FSP.stripPrefix base absolute of
+        Just _p -> _p
+        Nothing -> ".." </> (relpath (FSP.parent base) absolute)
+
+
 -- | Executed on file change. Updates loaded modules MVar-ed in PureScriptSite.
 handleFileEvent :: PureScriptSite -> SFN.Event -> IO ()
 handleFileEvent pureScriptSite event = do
-        let fp = SFN.eventPath event
+        -- Workaround for incorrect behaviour of Filesystem.FilePath module.
+        current <- FS.getWorkingDirectory >>= \_d -> return (FSP.collapse (_d </> "."))
+        let fp = relpath current (SFN.eventPath event)
         let mext = FSP.extension fp
         let _upsert = do
                 _parsed <- parseFile fp
