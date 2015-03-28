@@ -31,6 +31,7 @@ import Control.Applicative ((<$>))
 import Control.Exception (catch, SomeException)
 import Control.Monad (forever, forM, forM_)
 import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Reader (runReaderT)
 import Data.Either (rights)
 import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
@@ -227,7 +228,7 @@ getPureScriptInfo site = do
                             <tbody>
                                 $forall fnmods <- fnsmodules
                                     $with (fn, (time, modules)) <- fnmods
-                                        $forall (Module name _ _) <- modules
+                                        $forall (Module name _ _ _) <- modules
                                             <tr>
                                                 <td>#{show name}
                                                 <td>#{filePathToText fn}
@@ -447,7 +448,8 @@ compilePureScript ypso modules mainModuleName = case _result of
         Left _err -> Left (T.pack _err)
         Right (_js, _, _) -> Right (T.pack _js)
     where
-        _result = P.compile _psOptions modules ["yesod-purescript"]
+        -- _result = P.compile _psOptions modules ["yesod-purescript"]
+        _result = P.compile modules ["yesod-purescript"] `runReaderT` _psOptions
         _psOptions = P.defaultCompileOptions { P.optionsMain = Just (T.unpack mainModuleName)
                                              , P.optionsNoPrelude = False
                                              , P.optionsAdditional = _compileOptions
