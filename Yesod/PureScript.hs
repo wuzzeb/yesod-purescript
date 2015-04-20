@@ -40,7 +40,7 @@ import Filesystem.Path ((</>))
 import Formatting
 import Formatting.Time
 import Language.Haskell.TH
-import Language.PureScript (Module(Module))
+import Language.PureScript (Module, getModuleName)
 import Prelude
 import Text.Julius
 import Text.Regex.TDFA ((=~))
@@ -228,9 +228,9 @@ getPureScriptInfo site = do
                             <tbody>
                                 $forall fnmods <- fnsmodules
                                     $with (fn, (time, modules)) <- fnmods
-                                        $forall (Module name _ _ _) <- modules
+                                        $forall module <- modules
                                             <tr>
-                                                <td>#{show name}
+                                                <td>#{show (getModuleName module)}
                                                 <td>#{filePathToText fn}
                                                 <td>#{_formatTime time}
         |]
