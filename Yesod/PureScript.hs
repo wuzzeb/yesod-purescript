@@ -37,8 +37,8 @@ import Data.Maybe (catMaybes, mapMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime, getCurrentTime)
 import Filesystem.Path ((</>))
-import Formatting
-import Formatting.Time
+import Formatting ((%), format)
+import Formatting.Time (dateDash, hms)
 import Language.Haskell.TH
 import Language.PureScript (Module, getModuleName)
 import Prelude
@@ -303,10 +303,10 @@ removeModule pureScriptSite fileName = do
 -- | Calculate relative path.
 -- Both parameters must be absolute paths, the first one must be directory path.
 relpath :: FSP.FilePath -> FSP.FilePath -> FSP.FilePath
-relpath base absolute =
-    case FSP.stripPrefix base absolute of
+relpath _base absolute =
+    case FSP.stripPrefix _base absolute of
         Just _p -> _p
-        Nothing -> ".." </> (relpath (FSP.parent base) absolute)
+        Nothing -> ".." </> (relpath (FSP.parent _base) absolute)
 
 
 -- | Executed on file change. Updates loaded modules MVar-ed in PureScriptSite.
@@ -502,7 +502,7 @@ addPureScriptWidget ypso moduleName = do
 
 
 -- | Either add link to dynamically compiled PureScript or return statically compiled PureScript.
--- yesodPureScript :: Bool -> Route -> YesodPureScriptOptions -> Text -> Q Exp
+yesodPureScript :: Bool -> Name -> YesodPureScriptOptions -> Text -> ExpQ
 yesodPureScript dev routeName ypso moduleName =
         if dev then
             [|addScript $ $(conE routeName) $ getPureScriptRoute $ map T.pack [$(thModuleNameStrLit)]|]
