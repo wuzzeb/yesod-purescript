@@ -17,13 +17,15 @@ source-repository head
     location: https://github.com/mpietrzak/yesod-purescript
 
 library
-    exposed-modules: Yesod.PureScript
+    exposed-modules: Yesod.PureScript, Yesod.PureScript.EmbeddedGenerator
     other-modules: Yesod.PureScript.Data
     build-depends: aeson >= 0.8
                  , base >= 4 && < 5
                  , bytestring
                  , containers
                  , data-default
+                 , directory
+                 , filepath
                  , formatting
                  , fsnotify
                  , mtl
@@ -38,5 +40,6 @@ library
                  , template-haskell
                  , transformers
                  , yesod-core
+                 , yesod-static
     ghc-options: -Wall
 
