@@ -5,5 +5,5 @@ import Yesod.EmbeddedStatic
 import Yesod.PureScript.EmbeddedGenerator
 
 mkEmbeddedStatic False "myStatic" [
-   purescript "js/pure.js" return ["A"] [ "ps" ]
+   purescript "js/ps.js" defaultPsGeneratorOptions
   ]

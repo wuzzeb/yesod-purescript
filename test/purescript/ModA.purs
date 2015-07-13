@@ -1,6 +1,8 @@
 module A where
 
-data Hello = Hello { a :: String }
+import Data.Maybe
+
+data Hello = Hello { a :: Maybe String }
 
 abc :: String -> String
 abc x = x ++ "Abc"

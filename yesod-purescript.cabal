@@ -17,8 +17,7 @@ source-repository head
     location: https://github.com/mpietrzak/yesod-purescript
 
 library
-    exposed-modules: Yesod.PureScript, Yesod.PureScript.EmbeddedGenerator
-    other-modules: Yesod.PureScript.Data
+    exposed-modules: Yesod.PureScript.EmbeddedGenerator
     build-depends: aeson >= 0.8
                  , base >= 4 && < 5
                  , bytestring
@@ -28,10 +27,10 @@ library
                  , filepath
                  , formatting
                  , fsnotify
+                 , Glob
                  , mtl
-                 , purescript >= 0.6.9.3 && < 0.7
+                 , purescript >= 0.7 && < 0.8
                  , regex-tdfa
-                 , regex-tdfa-text
                  , shakespeare >= 2
                  , text
                  , time
