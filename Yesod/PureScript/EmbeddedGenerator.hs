@@ -27,7 +27,7 @@
 -- entire @src@ subdirectory for PureScript code and it is not possible to to configure the search
 -- directory in pulp.  Since you need a @src@ directory anyway, the Haskell code might as well be
 -- moved into there as well.  If you do not plan on using pulp, you can configure the search
--- directory of this module by changing 'psSourceDirectory').
+-- directory of this module by changing 'psSourceDirectory'.)
 --
 -- In your bower.json file, list all the PureScript dependencies you need.  Both pulp and this
 -- module look for files matching @bower_components\/purescript-*\/src\/**\/*.purs@, so just listing
@@ -35,9 +35,8 @@
 --
 -- = The EmbeddedStatic subsite
 --
--- This module integrates the PureScript code using the
--- <https://hackage.haskell.org/package/yesod-static/docs/Yesod-EmbeddedStatic.html Yesod.EmbeddedStatic>
--- module.  For example, if you use the project structure described above and also include bootstrap
+-- This module integrates the PureScript code using the 'EmbeddedStatic' subsite.
+-- For example, if you use the project structure described above and also include bootstrap
 -- in your bower.json file, you can create a module such as the following:
 --
 -- >module StaticFiles where
@@ -82,8 +81,8 @@
 -- >someHandler = defaultLayout $ do
 -- >    addStylesheet $ StaticR css_bootstrap_min_css
 -- >    addScript $ StaticR js_mypurescript_js
--- >    ...
 -- >    toWidget [julius|PS.SomeModule.someFunction();|]
+-- >    ...
 module Yesod.PureScript.EmbeddedGenerator(
     purescript
   , defaultPsGeneratorOptions
@@ -158,7 +157,7 @@ instance Lift PsGeneratorOptions where
 --
 --   * The default source directory is @src\/purescript@.
 --
---   * The dependencies are loaded from @bower_components/purescript-*/src/@.  Thus if you list
+--   * The dependencies are loaded from @bower_components\/purescript-*\/src\/@.  Thus if you list
 --   all your dependencies in @bower.json@, this generator will automatically pick them all up.
 --
 --   * 'AllSourceModules' is used for dead code elimination, which means all modules located in the
@@ -296,7 +295,7 @@ inMemoryMakeActions foreigns genCodeRef = P.MakeActions getInputTimestamp getOut
     where
         getInputTimestamp _ = return $ Left P.RebuildAlways
         getOutputTimestamp _ = return $ Nothing
-        progress _ = return ()
+        progress = liftIO . putStrLn
         readExterns mn = liftIO $ do
             genCode <- readIORef genCodeRef
             case M.lookup mn (genExterns genCode) of
