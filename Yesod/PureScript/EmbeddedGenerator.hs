@@ -85,8 +85,8 @@
 -- >    ...
 module Yesod.PureScript.EmbeddedGenerator(
     purescript
-  , defaultPsGeneratorOptions
   , PsGeneratorOptions(..)
+  , defaultPsGeneratorOptions
   , PsModuleRoots(..)
 ) where
 
@@ -295,7 +295,7 @@ inMemoryMakeActions foreigns genCodeRef = P.MakeActions getInputTimestamp getOut
     where
         getInputTimestamp _ = return $ Left P.RebuildAlways
         getOutputTimestamp _ = return $ Nothing
-        progress = liftIO . putStrLn
+        progress = liftIO . hPutStrLn stderr
         readExterns mn = liftIO $ do
             genCode <- readIORef genCodeRef
             case M.lookup mn (genExterns genCode) of
