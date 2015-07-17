@@ -223,7 +223,7 @@ parse files foreign =
 -- | Compile and bundle the purescript
 compileAndBundle :: Location -> PsGeneratorOptions -> MakeMode -> IO BL.ByteString
 compileAndBundle loc opts mode = do
-    hPutStrLn stderr $ "Compiling " ++ loc
+    hPutStrLn stderr $ "Using PureScript to produce " ++ loc
 
     srcNames <- glob (psSourceDirectory opts </> "**/*.purs")
     depNames <- concat <$> mapM glob (psDependencySrcGlobs opts)
@@ -295,7 +295,7 @@ inMemoryMakeActions foreigns genCodeRef = P.MakeActions getInputTimestamp getOut
     where
         getInputTimestamp _ = return $ Left P.RebuildAlways
         getOutputTimestamp _ = return $ Nothing
-        progress = liftIO . hPutStrLn stderr
+        progress x = liftIO $ hPutStrLn stderr $ "  " ++ x
         readExterns mn = liftIO $ do
             genCode <- readIORef genCodeRef
             case M.lookup mn (genExterns genCode) of

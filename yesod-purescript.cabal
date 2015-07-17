@@ -12,6 +12,11 @@ build-type:          Simple
 cabal-version:       >=1.8
 stability:           experimental
 
+extra-source-files: test/ps1/*.js
+                  , test/ps1/*.purs
+                  , test/ps2/*.purs
+                  , test/*.hs
+
 source-repository head
     type: git
     location: https://github.com/mpietrzak/yesod-purescript
@@ -42,3 +47,18 @@ library
                  , yesod-static
     ghc-options: -Wall
 
+test-suite test
+  type: exitcode-stdio-1.0
+  hs-source-dirs: test
+  ghc-options: -Wall
+  main-is: Spec.hs
+
+  Build-Depends:
+          yesod-purescript
+
+        , base
+        , hspec >= 2.1
+        , process
+        , template-haskell
+        , text
+        , yesod-static
