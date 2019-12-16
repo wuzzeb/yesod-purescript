@@ -19,7 +19,7 @@ extra-source-files: test/ps1/*.js
 
 source-repository head
     type: git
-    location: https://github.com/mpietrzak/yesod-purescript
+    location: https://github.com/wuzzeb/yesod-purescript
 
 library
     exposed-modules: Yesod.PureScript.EmbeddedGenerator
